@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 4.0.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/avatar-32x32.jpg">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/avatar-16x16.jpg">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/font-awesome.min.css">
+  <link rel="stylesheet" href="/lib/pace/pace-theme-flash.min.css">
+  <script src="/lib/pace/pace.min.js"></script>
+
+
+<script id="hexo-configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    hostname: new URL('https://ddhe9527.github.io').hostname,
+    root: '/',
+    scheme: 'Gemini',
+    version: '7.6.0',
+    exturl: false,
+    sidebar: {"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},
+    copycode: {"enable":true,"show_result":true,"style":null},
+    back2top: {"enable":true,"sidebar":false,"scrollpercent":false},
+    bookmark: {"enable":false,"color":"#222","save":"auto"},
+    fancybox: false,
+    mediumzoom: false,
+    lazyload: false,
+    pangu: false,
+    comments: {"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},
+    algolia: {
+      appID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    },
+    localsearch: {"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},
+    path: 'search.xml',
+    motion: {"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}
+  };
+</script>
+
+  <meta name="description" content="mysqld的内存使用策略mysqld启动前状态：OS总内存1985MB，已使用280MB，空闲941MB，Swap空间未使用 1[root@bogon ~]# ps -ef | grep mysqld2root      69294  68350  0 09:35 pts&#x2F;0    00:00:00 grep mysqld3[root@bogon ~]# free -m4">
+<meta name="keywords" content="MySQL,内存">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MySQL内存使用分析">
+<meta property="og:url" content="https:&#x2F;&#x2F;ddhe9527.github.io&#x2F;2019&#x2F;12&#x2F;11&#x2F;MySQL%E5%86%85%E5%AD%98%E4%BD%BF%E7%94%A8%E5%88%86%E6%9E%90&#x2F;index.html">
+<meta property="og:site_name" content="多多的小站">
+<meta property="og:description" content="mysqld的内存使用策略mysqld启动前状态：OS总内存1985MB，已使用280MB，空闲941MB，Swap空间未使用 1[root@bogon ~]# ps -ef | grep mysqld2root      69294  68350  0 09:35 pts&#x2F;0    00:00:00 grep mysqld3[root@bogon ~]# free -m4">
+<meta property="og:locale" content="zh-CN">
+<meta property="og:updated_time" content="2020-04-26T08:26:23.513Z">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="https://ddhe9527.github.io/2019/12/11/MySQL%E5%86%85%E5%AD%98%E4%BD%BF%E7%94%A8%E5%88%86%E6%9E%90/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome: false,
+    isPost: true
+  };
+</script>
+
+  <title>MySQL内存使用分析 | 多多的小站</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-meta">
+
+    <div>
+      <a href="/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">多多的小站</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+        <p class="site-subtitle">Chongqing, China</p>
+  </div>
+
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+</div>
+
+
+<nav class="site-nav">
+  
+  <ul id="menu" class="menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-fw fa-home"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-fw fa-th"></i>分类<span class="badge">2</span></a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-fw fa-tags"></i>标签<span class="badge">6</span></a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-fw fa-line-chart"></i>时间线<span class="badge">4</span></a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-fw fa-user"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>站内搜索
+        </a>
+      </li>
+  </ul>
+
+</nav>
+  <div class="site-search">
+    <div class="popup search-popup">
+    <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocorrect="off" autocapitalize="none"
+           placeholder="搜索..." spellcheck="false"
+           type="text" id="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result"></div>
+
+</div>
+<div class="search-pop-overlay"></div>
+
+  </div>
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content">
+            
+
+  <div class="posts-expand">
+      
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block " lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://ddhe9527.github.io/2019/12/11/MySQL%E5%86%85%E5%AD%98%E4%BD%BF%E7%94%A8%E5%88%86%E6%9E%90/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.jpg">
+      <meta itemprop="name" content="何多多">
+      <meta itemprop="description" content="DBA & DevOps">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="多多的小站">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          MySQL内存使用分析
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2019-12-11 21:43:34" itemprop="dateCreated datePublished" datetime="2019-12-11T21:43:34+08:00">2019-12-11</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/MySQL%E5%8E%9F%E7%90%86/" itemprop="url" rel="index">
+                    <span itemprop="name">MySQL原理</span>
+                  </a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h4 id="mysqld的内存使用策略"><a href="#mysqld的内存使用策略" class="headerlink" title="mysqld的内存使用策略"></a><strong>mysqld的内存使用策略</strong></h4><p>mysqld启动前状态：OS总内存1985MB，已使用280MB，空闲941MB，Swap空间未使用</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@bogon ~]# ps -ef | grep mysqld</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">root      69294  68350  0 09:35 pts/0    00:00:00 grep mysqld</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">[root@bogon ~]# free -m</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">              total        used        free      shared  buff/cache   available</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">Mem:           1985         280         941           8         763        1543</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">Swap:          2047           0        2047</span></pre></td></tr></table></figure>
+
+<a id="more"></a>
+
+<p>buffer_pool配置的大小是512MB</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@bogon ~]# cat /etc/my.cnf | grep innodb_buffer_pool_size</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">innodb_buffer_pool_size=512m</span></pre></td></tr></table></figure>
+
+<p>mysqld启动后：内存使用增加至478MB，增加了198MB，Swap无变化，buff/cache增长了12MB</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@bogon ~]# ps -ef | grep mysqld</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">root      69315      1 21 09:36 pts/0    00:00:01 /bin/sh /usr/local/mysql/bin/mysqld_safe --datadir=/mysql_data --pid-file=/mysql_data/rhel6.pid</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">mysql     69628  69315  8 09:36 pts/0    00:00:00 /usr/local/mysql/bin/mysqld --basedir=/usr/local/mysql --datadir=/mysql_data --plugin-dir=/usr/local/mysql/lib/plugin --user=mysql --log-error=error.log --pid-file=/mysql_data/rhel6.pid --socket=/mysql_data/mysql.sock --port=3306</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">root      69663  68350  0 09:37 pts/0    00:00:00 grep mysqld</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">[root@bogon ~]# free -m</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">              total        used        free      shared  buff/cache   available</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">Mem:           1985         478         731           8         775        1345</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">Swap:          2047           0        2047</span></pre></td></tr></table></figure>
+
+<blockquote>
+<p>备注：</p>
+<p>total：内存总数</p>
+<p>used：已经使用的内存数</p>
+<p>free：空闲的内存数</p>
+<p>shared：多个进程共享的内存总额</p>
+<p>buffers：系统分配但未被使用的buffers大小</p>
+<p>cached：Page 系统分配但未被使用的cache大小</p>
+</blockquote>
+<p>使用TOP命令观察mysqld进程的内存使用，看到常驻内存占用211MB，虚拟内存1506MB</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">iB Mem :  2033528 total,   740804 free,   498444 used,   794280 buff/cache</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">KiB Swap:  2097148 total,  2097148 free,        0 used.  1369180 avail Mem </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">   PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                                                                               </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"> 69628 mysql     20   0 1541944 216396   7116 S  0.0 10.6   0:00.56 mysqld</span></pre></td></tr></table></figure>
+
+<blockquote>
+<p>备注：</p>
+<p>PR：优先级</p>
+<p>NI：nice值，负值表示高优先级，正值表示低优先级</p>
+<p>VIRT：虚拟内存大小</p>
+<p>RES：常驻内存大小，是进程当前使用的内存大小，包含其他进程的共享内存，不包括swap out</p>
+<p>SHR：共享内存大小</p>
+</blockquote>
+<p>查看启动后buffer pool的情况</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; SHOW variables LIKE 'innodb_buffer_pool_size';</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| Variable_name           | Value     |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| innodb_buffer_pool_size | 536870912 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">SHOW</span> <span class="keyword">GLOBAL</span> <span class="keyword">STATUS</span> <span class="keyword">LIKE</span> <span class="string">'innodb_buffer_pool_pages_total'</span>;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">--------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">| Variable_name                  | Value |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">--------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| Innodb_buffer_pool_pages_total | 32764 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">--------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.03</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">SHOW</span> <span class="keyword">GLOBAL</span> <span class="keyword">STATUS</span> <span class="keyword">LIKE</span> <span class="string">'innodb_buffer_pool_pages_free'</span>;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">| Variable_name                 | Value |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">| Innodb_buffer_pool_pages_free | 30142 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.01</span> sec)</span></pre></td></tr></table></figure>
+
+<p>sys schema中提供了直接查看内存使用的VIEW，当然前提是要先开启performance_schema中的对应instrument和consumer，好在sys提供了存储过程帮我们一键开启：</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">CALL</span> sys.ps_setup_enable_instrument(<span class="string">'wait'</span>);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">CALL</span> sys.ps_setup_enable_instrument(<span class="string">'stage'</span>);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">CALL</span> sys.ps_setup_enable_instrument(<span class="string">'statement'</span>);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">CALL</span> sys.ps_setup_enable_consumer(<span class="string">'current'</span>);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">CALL</span> sys.ps_setup_enable_consumer(<span class="string">'history_long'</span>);</span></pre></td></tr></table></figure>
+
+<p>开启以后，查看memory_global_total即可</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; select * from sys.memory_global_total;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| total_allocated |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| 132.01 MiB      |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.01</span> sec)</span></pre></td></tr></table></figure>
+
+<p>为了测试内存波动，现把官方的测试库load进去：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@bogon test_db-master]# mysql -uroot -p123456 &lt; employees.sql</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">mysql: [Warning] Using a password on the command line interface can be insecure.</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">CREATING DATABASE STRUCTURE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">storage engine: InnoDB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">LOADING departments</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">LOADING employees</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">LOADING dept_emp</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">LOADING dept_manager</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">LOADING titles</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">INFO</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">LOADING salaries</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">data_load_time_diff</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">00:01:08</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">[root@bogon test_db-master]#</span></pre></td></tr></table></figure>
+
+<p>再次查看OS层面的内存使用情况，发现常驻内存占用409MB(增加了198MB)，虚拟内存1544MB(增加了38MB)</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">KiB Mem :  2033528 total,   286280 free,   699384 used,  1047864 buff/cache</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">KiB Swap:  2097148 total,  2097148 free,        0 used.  1165152 avail Mem </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">   PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                                                                               </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"> 69628 mysql     20   0 1580688 418448   9284 S  0.0 20.6   1:05.71 mysqld</span></pre></td></tr></table></figure>
+
+<p>再次查看buffer pool和内存的使用情况，看到free page减少至22818(减少了7324个page，对应114MB)，但sys.memory_global_total查到的仅增加了9MB左右内存(感觉这个VIEW的结果不太准确)</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; SHOW GLOBAL STATUS LIKE 'innodb_buffer_pool_pages_free';</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| Variable_name                 | Value |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| Innodb_buffer_pool_pages_free | 22818 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">select</span> * <span class="keyword">from</span> sys.memory_global_total;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">| total_allocated |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| 141.07 MiB      |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<p>从上述现象可以看出：</p>
+<ul>
+<li><strong>mysqld启动以后，仅在虚拟内存中分配了所需要的地址空间，并没有真正的映射到物理内存上(否则mysqld的内存占用会立即大于innodb_buffer_pool_size设定的512MB)，而是在使用过程中再映射到物理内存，如果物理内存(内存+swap)不足了，就会出错甚至退出</strong></li>
+</ul>
+<blockquote>
+<p> <em>Why is MySQL Using Less Memory Than Configured? (文档 ID 1483601.1)</em></p>
+<p><em>On Linux the operating system is not necessarily physically allocating the memory when it is requested. This is done as generally processes request more memory than it actually will end up using. So by defering the actual allocation of memory, work is reduced and it is possible to allow more processes than would fit into memory if all processes used the full amount of memory requested. Other operating systems uses different strategies, each with its pros and cons.</em></p>
+</blockquote>
+<hr>
+<h4 id="MySQL的内存分配相关参数"><a href="#MySQL的内存分配相关参数" class="headerlink" title="MySQL的内存分配相关参数"></a>MySQL的内存分配相关参数</h4><h5 id="共享内存"><a href="#共享内存" class="headerlink" title="共享内存"></a>共享内存</h5><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; select version();</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| version()  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| 5.7.25-log |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">where</span> variable_name <span class="keyword">in</span> (</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'innodb_buffer_pool_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'innodb_log_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'innodb_additional_mem_pool_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'key_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'query_cache_size'</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">    -&gt; );</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">| Variable_name           | Value     |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">| innodb_buffer_pool_size | 134217728 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">| innodb_log_buffer_size  | 16777216  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">| key_buffer_size         | 8388608   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">| query_cache_size        | 1048576   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">4 rows in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<ul>
+<li><strong>innodb_buffer_pool_size</strong>：buffer pool的大小，默认值128MB，建议为总内存的80%(InnoDB还要为buffer pool预留一些空间供control structures使用，因此实际大小为设定值的110%左右)</li>
+<li><strong>innodb_log_buffer_size</strong>：log buffer的大小，默认值8MB或16MB</li>
+<li><strong>key_buffer_size</strong>：MyISAM表的索引缓冲区(key cache)大小，默认值8MB<blockquote>
+<p>1，key cache用于缓存MyISAM表的索引块，而MyISAM表的数据块是直接存放于操作系统文件缓存中的</p>
+<p>2，如果大量使用MyISAM引擎的表，可将此值增大至总内存的25%，但不建议太大</p>
+<p>3，调大此参数可以增加MyISAM表BULK INSERT的效率</p>
+<p>4，通过观察状态变量Key_read_requests, Key_reads, Key_write_requests和Key_writes来了解key_buffer_size的设置是否合理，其中Key_reads/Key_read_requests的值应当小于0.1，Key_writes/Key_write_requests的值应当在1左右</p>
+<p>5，key cache的碎片率计算公式如下，Key_blocks_unused是未使用的块数，key_cache_block_size是每个块的大小。下面公式值越大，说明key cache利用率越高，碎片率越小：<br><strong>1 - ((Key_blocks_unused * key_cache_block_size) / key_buffer_size)</strong></p>
+</blockquote>
+</li>
+<li><strong>innodb_additional_mem_pool_size</strong>：存放数据字典和其它内部结构的内存大小，默认值8MB，它与innodb_use_sys_malloc参数有关联(<em>两个参数在MySQL 5.7.4中被移除</em>)<blockquote>
+<p><strong>该参数被移除的原因</strong>：早期操作系统的内存分配器性能和可伸缩性较差，并且当时没有适合多核心CPU的内存分配器。所以InnoDB实现了一套自己的内存分配系统，做为内存系统的参数之一，引入了innodb_additional_mem_pool_size。随着多核心CPU的广泛应用和操作系统的成熟，操作系统能够提供性能更高、可伸缩性更好的内存分配器，包括Hoard、libumem、mtmalloc、ptmalloc、tbbmalloc和TCMalloc等。InnoDB实现的内存分配器相比操作系统的内存分配器并没有明显优势，所以在MySQL 5.7.4及之后的版本中，移除了innodb_additional_mem_pool_size 和 innodb_use_sys_malloc两个参数，统一使用操作系统的内存分配器</p>
+</blockquote>
+</li>
+<li><strong>query_cache_size</strong>：查询缓存的大小，默认值1MB(<em>MySQL 8.0.3中被移除</em>)<blockquote>
+<p><strong>该参数被移除的原因</strong>：整个查询缓存功能被移除</p>
+</blockquote>
+</li>
+</ul>
+<h5 id="线程私有内存"><a href="#线程私有内存" class="headerlink" title="线程私有内存"></a>线程私有内存</h5><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; select version();</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| version()  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| 5.7.25-log |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">where</span> variable_name <span class="keyword">in</span> (</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'read_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'read_rnd_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'sort_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'join_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'binlog_cache_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'binlog_stmt_cache_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'bulk_insert_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'thread_stack'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'net_buffer_length'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'myisam_sort_buffer_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'preload_buffer_size'</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">    -&gt; );</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">| Variable_name           | Value    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">| binlog_cache_size       | 32768    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">| binlog_stmt_cache_size  | 32768    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line">| bulk_insert_buffer_size | 8388608  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line">| join_buffer_size        | 262144   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">| myisam_sort_buffer_size | 8388608  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">| net_buffer_length       | 16384    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line">| preload_buffer_size     | 32768    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line">| read_buffer_size        | 131072   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">| read_rnd_buffer_size    | 262144   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">34</span></pre></td><td class="code"><pre><span class="line">| sort_buffer_size        | 262144   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">35</span></pre></td><td class="code"><pre><span class="line">| thread_stack            | 262144   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">36</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">37</span></pre></td><td class="code"><pre><span class="line">11 rows in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">38</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">39</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">where</span> variable_name <span class="keyword">in</span> (</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">40</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'max_heap_table_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">41</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'tmp_table_size'</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">42</span></pre></td><td class="code"><pre><span class="line">    -&gt; );</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">43</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">44</span></pre></td><td class="code"><pre><span class="line">| Variable_name       | Value    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">45</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">46</span></pre></td><td class="code"><pre><span class="line">| max_heap_table_size | 16777216 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">47</span></pre></td><td class="code"><pre><span class="line">| tmp_table_size      | 16777216 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">48</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------------------+----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">49</span></pre></td><td class="code"><pre><span class="line">2 rows in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+<ul>
+<li><strong>read_buffer_size</strong>：默认128KB，必须是4KB的倍数，具有如下功能：<blockquote>
+<p>1，对MyISAM引擎的表进行顺序读(sequential scan)的缓存区大小</p>
+<p>2，MEMORY引擎表的MEMORY BLOCK SIZE大小</p>
+<p>3，各种引擎的表在执行ORDER BY排序操作时，用于缓存索引数据的临时文件的大小</p>
+<p>4，各种引擎的分区表在执行BULK INSERT时所使用的缓存区大小</p>
+<p>5，用于缓存各种引擎的表的子查询结果集的缓存区大小</p>
+</blockquote>
+</li>
+<li><strong>read_rnd_buffer_size</strong>：默认256KB，具有如下功能：<blockquote>
+<p>1，MRR所使用的排序buffer大小</p>
+<p>2，对MyISAM引擎的表进行随机读的缓冲区大小。例如按照某字段的ORDER BY顺序对MyISAM表进行rowid排序时(参与排序的所有字段(包括select与order by字段)长度超过max_length_for_sort_data)，会先在Sort Buffer中按照需求进行排序，然后将rowid放入read_rnd_buffer_size管理的缓冲区中按照rowid再排序，最后再用有序的rowid回表，从而将随机读转化为顺序读(类似于MRR)</p>
+</blockquote>
+</li>
+<li><strong>sort_buffer_size</strong>：SQL语句用来进行内存排序操作(order by,group by)的buffer大小，默认256KB，过小会导致磁盘排序。如果增大了max_sort_length参数值(限定字段的前N个字节参与排序,尤其是针对BLOB和TEXT类型)，则sort_buffer_size值也应当增大</li>
+<li><strong>binlog_cache_size</strong>：存放每个线程自己transaction的binlog的缓存大小，默认32KB，如果有大事务可以调大</li>
+<li><strong>binlog_stmt_cache_size</strong>：存放每个线程自己的transaction中非事务语句的binlog event的缓存大小，默认32KB</li>
+<li><strong>join_buffer_size</strong>：join buffer的大小，在BNL和BKA中，用于缓存驱动表的数据，默认256KB</li>
+<li><strong>bulk_insert_buffer_size</strong>：用于提高MyISAM表的bulk insert操作(INSERT…SELECT，INSERT VALUES(),…,()，LOAD DATA)效率的cache tree大小，默认8MB</li>
+<li><strong>tmp_table_size</strong>：内存临时表的大小上限(其实是由<strong>MIN(max_heap_table_size,tmp_table_size)</strong>决定的)，默认为16MB，超过会转变为磁盘临时表</li>
+<li><strong>max_heap_table_size</strong>：内存表的大小上限，默认16MB</li>
+<li><strong>preload_buffer_size</strong>：预加载索引时分配的缓冲区大小，默认32KB</li>
+<li><strong>myisam_sort_buffer_size</strong>：MyISAM表执行REPAIR TABLE和CREATE/ALTER INDEX时所使用的排序操作的buffer大小，默认8MB</li>
+<li><strong>thread_stack</strong>：每个连接线程被创建时，MySQL给它分配的内存堆栈大小，默认256KB</li>
+<li><strong>net_buffer_length</strong>：connection buffer和result buffer的初始大小，默认16KB，这两个缓冲区最大能够增长至max_allowed_packet参数指定的大小(4MB)，SQL执行完后收缩至net_buffer_length参数指定的大小</li>
+</ul>
+<p>根据上面的描述，可以使用如下公式大致评估mysql进程可能使用的最大内存量(通常达不到这个值，因为极少可能出现大量线程同时使用内存临时表和bulk insert buffer等)</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">## MOS文档(ID 1483601.1)中给出了如下公式：</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">Global Usage &#x3D; key_buffer_size + query_cache_size + 1.1 * innodb_buffer_pool_size + innodb_additional_mem_pool_size + innodb_log_buffer_size</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">Per Thread &#x3D; thread_stack + 2 * net_buffer_length</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">Note: the per query contribution is more or less based on an average query</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">Per Query &#x3D; &quot;buffer for reading rows&quot; + &quot;sorting&quot; + &quot;full joins&quot; + &quot;binlog cache&quot; + &quot;index preload&quot; + &quot;internal tmp tables&quot;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">          &#x3D;  max(read_buffer_size, read_rnd_buffer_size)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">          +  max(sort_buffer_size&#x2F;2, &quot;avg queries with scan&quot; * &quot;avg scans with merge&quot; * sort_buffer_size)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">          + &quot;avg full joins&quot; * join_buffer_size</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">          + &quot;avg binlog cache use&quot; * binlog_cache_size</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">          +  preload_buffer_size</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">          + &quot;avg tmp tables&quot; * min(tmp_table_size, max_heap_table_size)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">Total &#x3D; &quot;global&quot; + max_used_connections * (&quot;thread&quot; + &quot;query&quot;)</span></pre></td></tr></table></figure>
+<hr>
+<h4 id="MySQL与Hugepage"><a href="#MySQL与Hugepage" class="headerlink" title="MySQL与Hugepage"></a>MySQL与Hugepage</h4><h5 id="hugepage介绍"><a href="#hugepage介绍" class="headerlink" title="hugepage介绍"></a>hugepage介绍</h5><ul>
+<li>大页内存的原理涉及到操作系统的虚拟地址到物理地址的转换过程。操作系统为了能同时运行多个进程，会为每个进程提供一个虚拟进程空间。为了保证进程能在内存中找到虚拟页对应的实际物理块，需要为每个进程维护一个映像表，即页表。页表记录了每一个虚拟页在内存中对应的物理块号。在配置好了页表后，进程执行时，通过查找该表，即可找到每页在内存中的物理块号</li>
+<li>由于页表是存放在内存中的，这使CPU在每存取一个数据时，都要两次访问内存。第一次时访问内存中的页表，从中找到指定页的物理块号，再将块号与页内偏移拼接，以形成物理地址。第二次访问内存时，才是从第一次所得地址中获得所需数据。因此，采用这种方式将使计算机的处理速度降低近1/2</li>
+<li>为了提高地址变换速度，可在地址变换机构中，增设一个具有并行查找能力的特殊高速缓存，即快表(TLB)，用以存放当前访问的那些页表项。由于成本的关系，快表不可能做得很大，通常只存放16~512个页表项</li>
+<li>现代的计算机系统，都支持非常大的虚拟地址空间(2^32~2^64)。在这样的环境下，页表就变得非常庞大。例如，假设页大小为4K，对占用40G内存的程序来说，页表大小为10M，而且还要求空间是连续的。为了解决空间连续问题，可以引入二级或者三级页表。但是这更加影响性能，因为如果快表缺失，访问页表的次数由两次变为三次或者四次。由于程序可以访问的内存空间很大，如果程序的访存局部性不好，则会导致快表一直缺失，从而严重影响性能。此外，由于页表项有10M之多，而快表只能缓存几百页，即使程序的访存性能很好，在大内存的情况下，快表缺失的概率也很大。但是假设我们将页大小变为1G，40G内存的页表项也只有40，快表完全不会缺失！即使缺失，由于表项很少，可以采用一级页表，缺失只会导致两次访存。这就是大页内存可以优化程序性能的根本原因：<strong>提高快表(TLB)的命中率，减少内存访问次数</strong></li>
+</ul>
+<h5 id="huge-page优势"><a href="#huge-page优势" class="headerlink" title="huge page优势"></a>huge page优势</h5><ul>
+<li>提高快表(TLB)的命中率，减少内存访问次数</li>
+<li>hugepage是共享内存，它会被一直pin在内存中，避免被交换</li>
+</ul>
+<h5 id="为MySQL开启hugepage-Linux"><a href="#为MySQL开启hugepage-Linux" class="headerlink" title="为MySQL开启hugepage(Linux)"></a>为MySQL开启hugepage(Linux)</h5><p>InnoDB支持hugepage，可用于buffer pool和additional memory pool。测试环境的MySQL 5.7.25版本中已经没有innodb_additional_mem_pool_size参数，因此这里仅考虑buffer pool</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; select version();</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| version()  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| 5.7.25-log |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.01</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">where</span> variable_name <span class="keyword">in</span> (</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'innodb_buffer_pool_size'</span>,</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="string">'innodb_additional_mem_pool_size'</span>);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| Variable_name           | Value     |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">| innodb_buffer_pool_size | 536870912 |512MB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-------------------------+-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">global</span> <span class="keyword">variables</span> <span class="keyword">like</span> <span class="string">'large_page%'</span>;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">| Variable_name   | Value |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">| large_page_size | 0     |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">| large_pages     | OFF   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------------+-------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">2 rows in <span class="keyword">set</span> (<span class="number">0.01</span> sec)</span></pre></td></tr></table></figure>
+<p>为了开启大页，首先建议关闭透明大页；如果如下两条命令的输出都是never，说明已经关闭transparent hugepage</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /sys/kernel/mm/transparent_hugepage/defrag</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">always madvise [never]</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /sys/kernel/mm/transparent_hugepage/enabled</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">always madvise [never]</span></pre></td></tr></table></figure>
+<p>如果上述命令输出不是never，则在/etc/rc.local中追加如下内容(如果是Linux 7.x，则为/etc/rc.d/rc.local)，重启后再使用上述命令检查</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">if test -f /sys/kernel/mm/transparent_hugepage/enabled; then</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">echo never &gt; /sys/kernel/mm/transparent_hugepage/enabled</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">fi</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">if test -f /sys/kernel/mm/transparent_hugepage/defrag; then</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">echo never &gt; /sys/kernel/mm/transparent_hugepage/defrag</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">fi</span></pre></td></tr></table></figure>
+<p>在/etc/security/limits.conf定义mysql用户的memlock为unlimited</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql soft memlock unlimited</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">mysql hard memlock unlimited</span></pre></td></tr></table></figure>
+<p>查看mysql用户的属组信息</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# id mysql</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">uid=496(mysql) gid=504(mysql) groups=504(mysql)</span></pre></td></tr></table></figure>
+<p>编辑/etc/sysctl.conf，添加如下内容</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">vm.hugetlb_shm_group=504   # mysql用户的gid</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">vm.nr_hugepages=512        # 512*2MB=1GB</span></pre></td></tr></table></figure>
+<blockquote>
+<p>vm.nr_hugepages定义了hugepage的数量，它应当满足如下公式：<br>nr_hugepages * Hugepagesize &gt; innodb_buffer_pool_size + innodb_additional_mem_pool_size</p>
+</blockquote>
+<p>正确设置kernel.shmmax和kernel.shmall，编辑/etc/sysctl.conf，添加如下内容</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">kernel.shmmax=1073741824‬    # 1GB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">kernel.shmall=2097152       # 2097152*4096=8GB</span></pre></td></tr></table></figure>
+<blockquote>
+<p>kernel.shmmax：单个共享内存段的最大值(字节)，应当大于要分给mysql使用的hugepage大小<br>kernel.shmall：共享内存总页数，建议为物理内存大小的90%除以PAGE_SIZE(分页大小：getconf PAGE_SIZE)，应当大于：要分给mysql使用的hugepage大小/PAGE_SIZE</p>
+</blockquote>
+<p>使上述配置生效，并检查大页是否按照预期配置开启。下面的输出表示OS支持并且已经开启大页功能，页面大小为2MB，共512个页，一共1GB大页内存。如果(AnonHugePages不为0，说明没关透明大页)</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# sysctl -p</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">...</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     512</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:      512</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr></table></figure>
+<p>在my.cnf中增加如下配置，并重启mysqld(这里innodb_buffer_pool_size设定的是512MB)</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">large_pages&#x3D;ON</span></pre></td></tr></table></figure>
+<p>查看大页的使用情况</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#大页已使用512-498=14个，操作系统承诺会分配的大页还有254个，因此预计最大会分配14+254个页，大小为268*2MB=536MB大页内存</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     512        ## 总的大页数量</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:      498        ## 未分配的大页数量</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:      254        ## OS承诺会分配，但暂时还没分配的大页数量</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">------------------------------------------------------------------------</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#top输出</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">Mem:   1907580k total,  1706188k used,   201392k free,     8724k buffers</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">Swap:  4095992k total,    27532k used,  4068460k free,   265224k cached</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+  COMMAND                                                                                              </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">66287 mysql     20   0 1628m 184m  11m S  0.0  9.9   0:08.51 mysqld             </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line"><span class="meta">mysql&gt;</span><span class="bash"> show global variables like <span class="string">'large_page%'</span>;</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">+-----------------+---------+</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">| Variable_name   | Value   |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">+-----------------+---------+</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">| large_page_size | 2097152 |2MB，等于Hugepagesize</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">| large_pages     | ON      |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">+-----------------+---------+</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">2 rows in set (0.00 sec)</span></pre></td></tr></table></figure>
+<p>执行一个大的SQL查询后，再次查看mysqld内存占用和大页使用情况</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#大页已使用512-445=67个，操作系统承诺会分配的大页还有201个，因此预计最大会分配67+201个页，大小为268*2MB=536MB大页内存</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     512</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:      445</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:      201</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">------------------------------------------------------------------------</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#top输出</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">Mem:   1907580k total,  1755440k used,   152140k free,      192k buffers</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">Swap:  4095992k total,    42760k used,  4053232k free,    18308k cached</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+  COMMAND                                                                                              </span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">67078 mysql     20   0 1692m 184m 1664 S  0.3  9.9   0:08.69 mysqld</span></pre></td></tr></table></figure>
+<h5 id="Troubleshooting"><a href="#Troubleshooting" class="headerlink" title="Troubleshooting"></a>Troubleshooting</h5><p>测试innodb_buffer_pool_size大于hugepage的情况：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#保持innodb_buffer_pool_size=512M不变，修改/etc/sysctl.cnf中的vm.nr_hugepages=128，使大页总大小为256MB，小于了buffer pool大小</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# service mysqld stop</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">Shutting down MySQL....                                    [  OK  ]</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# sysctl -p</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">...</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     128</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:      128</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#启动mysqld时，虽然可以成功启动，但是error.log中出现报错信息</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.182908Z 0 [Note] InnoDB: Initializing buffer pool, total size = 512M, instances = 1, chunk size = 128M</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.193825Z 0 [Warning] InnoDB: Failed to allocate 138412032 bytes. errno 12</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.193969Z 0 [Warning] InnoDB: Using conventional memory pool</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.201059Z 0 [Warning] InnoDB: Failed to allocate 138412032 bytes. errno 12</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.201139Z 0 [Warning] InnoDB: Using conventional memory pool</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.207174Z 0 [Warning] InnoDB: Failed to allocate 138412032 bytes. errno 12</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.207282Z 0 [Warning] InnoDB: Using conventional memory pool</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">2019-12-11T09:56:30.218470Z 0 [Note] InnoDB: Completed initialization of buffer pool</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     128</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:      119</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:       61</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"><span class="comment">#执行大查询后，大页有被使用的情况，说明即使大页比buffer pool小，也可以使用大页</span></span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">[root@rhel6 ~]# cat /proc/meminfo | grep -i huge</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">34</span></pre></td><td class="code"><pre><span class="line">AnonHugePages:         0 kB</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">35</span></pre></td><td class="code"><pre><span class="line">HugePages_Total:     128</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">36</span></pre></td><td class="code"><pre><span class="line">HugePages_Free:       67</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">37</span></pre></td><td class="code"><pre><span class="line">HugePages_Rsvd:        9</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">38</span></pre></td><td class="code"><pre><span class="line">HugePages_Surp:        0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">39</span></pre></td><td class="code"><pre><span class="line">Hugepagesize:       2048 kB</span></pre></td></tr></table></figure>
+<hr>
+<h4 id="reference"><a href="#reference" class="headerlink" title="reference"></a><em>reference</em></h4><p><em><a href="https://dev.mysql.com/doc/refman/5.7/en/optimizing-memory.html" target="_blank" rel="noopener">https://dev.mysql.com/doc/refman/5.7/en/optimizing-memory.html</a></em></p>
+<p><em>How to estimate how much memory MySQL uses (文档 ID 1359675.1)</em></p>
+<p><em>Why is MySQL Using Less Memory Than Configured? (文档 ID 1483601.1)</em></p>
+
+    </div>
+
+    
+    
+    
+        <div class="reward-container">
+  <div></div>
+  <button disable="enable" onclick="var qr = document.getElementById(&quot;qr&quot;); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    打赏
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/weixin.png" alt="何多多 微信支付">
+        <p>微信支付</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/zhifubao.png" alt="何多多 支付宝">
+        <p>支付宝</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          
+          <div class="post-tags">
+              <a href="/tags/MySQL/" rel="tag"><i class="fa fa-tag"></i> MySQL</a>
+              <a href="/tags/%E5%86%85%E5%AD%98/" rel="tag"><i class="fa fa-tag"></i> 内存</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item"></div>
+      <div class="post-nav-item">
+    <a href="/2019/12/16/open_files_limit%E5%8F%82%E6%95%B0%E7%9C%9F%E5%AE%9E%E5%80%BC%E6%B5%8B%E8%AF%95/" rel="next" title="open_files_limit参数真实值测试">
+      open_files_limit参数真实值测试 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+  </div>
+
+
+          </div>
+          
+    <div class="comments" id="gitalk-container"></div>
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let activeClass = CONFIG.comments.activeClass;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-4"><a class="nav-link" href="#mysqld的内存使用策略"><span class="nav-number">1.</span> <span class="nav-text">mysqld的内存使用策略</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#MySQL的内存分配相关参数"><span class="nav-number">2.</span> <span class="nav-text">MySQL的内存分配相关参数</span></a><ol class="nav-child"><li class="nav-item nav-level-5"><a class="nav-link" href="#共享内存"><span class="nav-number">2.1.</span> <span class="nav-text">共享内存</span></a></li><li class="nav-item nav-level-5"><a class="nav-link" href="#线程私有内存"><span class="nav-number">2.2.</span> <span class="nav-text">线程私有内存</span></a></li></ol></li><li class="nav-item nav-level-4"><a class="nav-link" href="#MySQL与Hugepage"><span class="nav-number">3.</span> <span class="nav-text">MySQL与Hugepage</span></a><ol class="nav-child"><li class="nav-item nav-level-5"><a class="nav-link" href="#hugepage介绍"><span class="nav-number">3.1.</span> <span class="nav-text">hugepage介绍</span></a></li><li class="nav-item nav-level-5"><a class="nav-link" href="#huge-page优势"><span class="nav-number">3.2.</span> <span class="nav-text">huge page优势</span></a></li><li class="nav-item nav-level-5"><a class="nav-link" href="#为MySQL开启hugepage-Linux"><span class="nav-number">3.3.</span> <span class="nav-text">为MySQL开启hugepage(Linux)</span></a></li><li class="nav-item nav-level-5"><a class="nav-link" href="#Troubleshooting"><span class="nav-number">3.4.</span> <span class="nav-text">Troubleshooting</span></a></li></ol></li><li class="nav-item nav-level-4"><a class="nav-link" href="#reference"><span class="nav-number">4.</span> <span class="nav-text">reference</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+    <img class="site-author-image" itemprop="image" alt="何多多"
+      src="/images/avatar.jpg">
+  <p class="site-author-name" itemprop="name">何多多</p>
+  <div class="site-description" itemprop="description">DBA & DevOps</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">4</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">2</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">6</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+<div class="copyright">
+  
+  &copy; 2019 – 
+  <span itemprop="copyrightYear">2020</span>
+  <span class="with-love">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">何多多</span>
+</div>
+  <div class="addthis_inline_share_toolbox">
+    <script src="//s7.addthis.com/js/300/addthis_widget.js#pubid=ra-5df47cf348219a47" async="async"></script>
+  </div>
+
+        
+<div class="busuanzi-count">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+<script src="/js/utils.js"></script><script src="/js/motion.js"></script>
+<script src="/js/schemes/pisces.js"></script>
+<script src="/js/next-boot.js"></script>
+
+
+
+  
+  <script>
+    (function(){
+      var bp = document.createElement('script');
+      var curProtocol = window.location.protocol.split(':')[0];
+      bp.src = (curProtocol === 'https') ? 'https://zz.bdstatic.com/linksubmit/push.js' : 'http://push.zhanzhang.baidu.com/push.js';
+      var s = document.getElementsByTagName("script")[0];
+      s.parentNode.insertBefore(bp, s);
+    })();
+  </script>
+
+
+
+
+  <script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.css">
+
+<script>
+NexT.utils.loadComments(document.querySelector('#gitalk-container'), () => {
+  NexT.utils.getScript('//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js', () => {
+    var gitalk = new Gitalk({
+      clientID: 'c3e651994454ca657b5b',
+      clientSecret: 'b9be0561665fd24fb631e5bdcba8dd4b402e3110',
+      repo: 'ddhe9527.github.io',
+      owner: 'ddhe9527',
+      admin: ['ddhe9527'],
+      id: 'be0f8f9e733125d6684993b17f686b67',
+        language: 'zh-CN',
+      distractionFreeMode: 'true'
+    });
+    gitalk.render('gitalk-container');
+  }, window.Gitalk);
+});
+</script>
+
+</body>
+</html>

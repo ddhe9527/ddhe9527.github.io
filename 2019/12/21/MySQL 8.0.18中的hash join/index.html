@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 4.0.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/avatar-32x32.jpg">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/avatar-16x16.jpg">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/font-awesome.min.css">
+  <link rel="stylesheet" href="/lib/pace/pace-theme-flash.min.css">
+  <script src="/lib/pace/pace.min.js"></script>
+
+
+<script id="hexo-configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    hostname: new URL('https://ddhe9527.github.io').hostname,
+    root: '/',
+    scheme: 'Gemini',
+    version: '7.6.0',
+    exturl: false,
+    sidebar: {"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},
+    copycode: {"enable":true,"show_result":true,"style":null},
+    back2top: {"enable":true,"sidebar":false,"scrollpercent":false},
+    bookmark: {"enable":false,"color":"#222","save":"auto"},
+    fancybox: false,
+    mediumzoom: false,
+    lazyload: false,
+    pangu: false,
+    comments: {"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},
+    algolia: {
+      appID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    },
+    localsearch: {"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},
+    path: 'search.xml',
+    motion: {"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}
+  };
+</script>
+
+  <meta name="description" content="概述在之前的版本中，MySQL已经把Nested Loop玩出了诸多花样(除普通NL外，还有BNL和BKA)。随着MySQL 8.0中统计直方图的完善，hash join终于出现在了MySQL 8.0.18版本中，用于替代性能较差的BNL。">
+<meta name="keywords" content="SQL优化,MySQL,执行计划">
+<meta property="og:type" content="article">
+<meta property="og:title" content="MySQL 8.0.18中的Hash Join">
+<meta property="og:url" content="https:&#x2F;&#x2F;ddhe9527.github.io&#x2F;2019&#x2F;12&#x2F;21&#x2F;MySQL%208.0.18%E4%B8%AD%E7%9A%84hash%20join&#x2F;index.html">
+<meta property="og:site_name" content="多多的小站">
+<meta property="og:description" content="概述在之前的版本中，MySQL已经把Nested Loop玩出了诸多花样(除普通NL外，还有BNL和BKA)。随着MySQL 8.0中统计直方图的完善，hash join终于出现在了MySQL 8.0.18版本中，用于替代性能较差的BNL。">
+<meta property="og:locale" content="zh-CN">
+<meta property="og:updated_time" content="2020-04-26T08:26:23.512Z">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="https://ddhe9527.github.io/2019/12/21/MySQL%208.0.18%E4%B8%AD%E7%9A%84hash%20join/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome: false,
+    isPost: true
+  };
+</script>
+
+  <title>MySQL 8.0.18中的Hash Join | 多多的小站</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-meta">
+
+    <div>
+      <a href="/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">多多的小站</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+        <p class="site-subtitle">Chongqing, China</p>
+  </div>
+
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+</div>
+
+
+<nav class="site-nav">
+  
+  <ul id="menu" class="menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-fw fa-home"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-fw fa-th"></i>分类<span class="badge">2</span></a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-fw fa-tags"></i>标签<span class="badge">6</span></a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-fw fa-line-chart"></i>时间线<span class="badge">4</span></a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-fw fa-user"></i>关于我</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>站内搜索
+        </a>
+      </li>
+  </ul>
+
+</nav>
+  <div class="site-search">
+    <div class="popup search-popup">
+    <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocorrect="off" autocapitalize="none"
+           placeholder="搜索..." spellcheck="false"
+           type="text" id="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result"></div>
+
+</div>
+<div class="search-pop-overlay"></div>
+
+  </div>
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+  <div class="reading-progress-bar"></div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content">
+            
+
+  <div class="posts-expand">
+      
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block " lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://ddhe9527.github.io/2019/12/21/MySQL%208.0.18%E4%B8%AD%E7%9A%84hash%20join/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.jpg">
+      <meta itemprop="name" content="何多多">
+      <meta itemprop="description" content="DBA & DevOps">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="多多的小站">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          MySQL 8.0.18中的Hash Join
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2019-12-21 14:19:00" itemprop="dateCreated datePublished" datetime="2019-12-21T14:19:00+08:00">2019-12-21</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/SQL%E4%BC%98%E5%8C%96/" itemprop="url" rel="index">
+                    <span itemprop="name">SQL优化</span>
+                  </a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h4 id="概述"><a href="#概述" class="headerlink" title="概述"></a>概述</h4><p>在之前的版本中，MySQL已经把Nested Loop玩出了诸多花样(除普通NL外，还有BNL和BKA)。随着MySQL 8.0中统计直方图的完善，hash join终于出现在了MySQL 8.0.18版本中，用于替代性能较差的BNL。</p>
+<a id="more"></a>
+
+<p>MySQL 8.0.18中hash join的使用<strong>前提条件</strong>包括如下3点：</p>
+<ol>
+<li>表与表之间是等值内连接并且优化器决定在连接字段上不使用索引，或者是不包含任何连接条件的笛卡尔连接；</li>
+<li>在满足“条件1”的前提下，表与表之间可以包含不等值连接条件；</li>
+<li>如果SQL中任意两个表之间的连接不满足“条件1”，则该SQL中的所有JOIN都不能使用hash join；</li>
+</ol>
+<p>为了在执行计划中看到”hash join”关键字，需要使用”EXPLAIN FORMAT=TREE”或”EXPLAIN ANALYZE”语句，否则看到的仍然是BNL(Block Nested Loop)，这点很容易产生误导。</p>
+<p>hash join和BNL/BKA一样，都要使用到join buffer，其大小由join_buffer_size控制(默认256KB)，超过后会生成临时文件在磁盘上进行操作(文件操作又进一步涉及open_files_limit参数)。</p>
+<p>为了支持hash join，MySQL的优化器选项中增加了如下配置：</p>
+<ul>
+<li>optimizer_switch中新增了hash join开关选项：hash_join，可以在global或session级别修改该参数；</li>
+<li>新增2个hint：HASH_JOIN和NO_HASH_JOIN，用于在SQL级别控制hash join行为，但如果有合适的索引可用，HASH_JOIN这个hint仍然可能被忽略(从MySQL 8.0.19开始，这两个hint被置为无效)；</li>
+</ul>
+<p><strong>不适合使用hash join的场景</strong></p>
+<ol>
+<li>被驱动表的关联字段上存在筛选能力高的索引可用；</li>
+<li>含有LIMIT子句，这时使用BNL能够提前结束表连接，而hash join在取LIMIT之前仍需要全部进行连接；</li>
+</ol>
+<hr>
+<h4 id="测试"><a href="#测试" class="headerlink" title="测试"></a>测试</h4><p>环境准备：</p>
+<ul>
+<li>数据库版本确认为8.0.18，join_buffer_size为默认的256KB大小，optimizer_switch中的hash_join=on</li>
+<li>创建三张表t1、t2和t3，各包含10万行数据，t1_val和t2_val字段中都是0 ~ 99之间的数字，t3_val字段中是0 ~ 49之间的数字，这三个字段上均没有索引</li>
+</ul>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; select version();</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| version() |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| 8.0.18    |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">-----------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">like</span> <span class="string">'join_buffer_size'</span>;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------------+--------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">| Variable_name    | Value  |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------------+--------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| join_buffer_size | 262144 |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">------------------+--------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">show</span> <span class="keyword">variables</span> <span class="keyword">like</span> <span class="string">'optimizer_switch'</span>\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">1.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">Variable_name: optimizer_switch</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">        <span class="keyword">Value</span>: index_merge=<span class="keyword">on</span>,index_merge_union=<span class="keyword">on</span>,index_merge_sort_union=<span class="keyword">on</span>,index_merge_intersection=<span class="keyword">on</span>,engine_condition_pushdown=<span class="keyword">on</span>,index_condition_pushdown=<span class="keyword">on</span>,mrr=<span class="keyword">on</span>,mrr_cost_based=<span class="keyword">on</span>,block_nested_loop=<span class="keyword">on</span>,batched_key_access=<span class="keyword">off</span>,materialization=<span class="keyword">on</span>,semijoin=<span class="keyword">on</span>,loosescan=<span class="keyword">on</span>,firstmatch=<span class="keyword">on</span>,duplicateweedout=<span class="keyword">on</span>,subquery_materialization_cost_based=<span class="keyword">on</span>,use_index_extensions=<span class="keyword">on</span>,condition_fanout_filter=<span class="keyword">on</span>,derived_merge=<span class="keyword">on</span>,use_invisible_indexes=<span class="keyword">off</span>,skip_scan=<span class="keyword">on</span>,hash_join=<span class="keyword">on</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">CREATE</span> <span class="keyword">TABLE</span> t1 (t1_id <span class="built_in">int</span> <span class="keyword">unsigned</span> <span class="keyword">NOT</span> <span class="literal">NULL</span> auto_increment PRIMARY <span class="keyword">KEY</span>, t1_val <span class="built_in">int</span> <span class="keyword">unsigned</span>, t1_str <span class="built_in">varchar</span>(<span class="number">300</span>));</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (0.23 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">mysql&gt; CREATE TABLE t2 (t2_id int unsigned NOT NULL auto_increment PRIMARY KEY, t2_val int unsigned,t2_str varchar(300));</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (0.11 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">mysql&gt; CREATE TABLE t3 (t3_id int unsigned NOT NULL auto_increment PRIMARY KEY, t3_val int unsigned,t3_str varchar(300));</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (1.76 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line">mysql&gt; SET SESSION cte_max_recursion_depth = 100000;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (0.00 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">34</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">35</span></pre></td><td class="code"><pre><span class="line">mysql&gt; INSERT INTO t1 (t1_val) WITH RECURSIVE digits(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM digits WHERE i&lt;100000) SELECT FLOOR(RAND()*100) FROM digits;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">36</span></pre></td><td class="code"><pre><span class="line">Query OK, 100000 rows affected (1.78 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">37</span></pre></td><td class="code"><pre><span class="line">Records: 100000  Duplicates: 0  Warnings: 0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">38</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">39</span></pre></td><td class="code"><pre><span class="line">mysql&gt; INSERT INTO t2 (t2_val) WITH RECURSIVE digits(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM digits WHERE i&lt;100000) SELECT FLOOR(RAND()*100) FROM digits;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">40</span></pre></td><td class="code"><pre><span class="line">Query OK, 100000 rows affected (1.87 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">41</span></pre></td><td class="code"><pre><span class="line">Records: 100000  Duplicates: 0  Warnings: 0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">42</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">43</span></pre></td><td class="code"><pre><span class="line">mysql&gt; INSERT INTO t3 (t3_val) WITH RECURSIVE digits(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM digits WHERE i&lt;100000) SELECT FLOOR(RAND()*50) FROM digits;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">44</span></pre></td><td class="code"><pre><span class="line">Query OK, 100000 rows affected (3.43 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">45</span></pre></td><td class="code"><pre><span class="line">Records: 100000  Duplicates: 0  Warnings: 0</span></pre></td></tr></table></figure>
+
+<p>收集并查看统计信息直方图(非必要步骤)</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; ANALYZE TABLE t1 UPDATE HISTOGRAM ON t1_val WITH 100 BUCKETS;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">| Table   | Op        | Msg_type | Msg_text                                          |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">| test.t1 | histogram | status   | Histogram statistics created for column 't1_val'. |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">1 rows in <span class="keyword">set</span> (<span class="number">0.32</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">ANALYZE</span> <span class="keyword">TABLE</span> t2 <span class="keyword">UPDATE</span> HISTOGRAM <span class="keyword">ON</span> t2_val <span class="keyword">WITH</span> <span class="number">100</span> BUCKETS;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">| Table   | Op        | Msg_type | Msg_text                                          |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| test.t2 | histogram | status   | Histogram statistics created for column 't2_val'. |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">1 rows in <span class="keyword">set</span> (<span class="number">0.21</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">ANALYZE</span> <span class="keyword">TABLE</span> t3 <span class="keyword">UPDATE</span> HISTOGRAM <span class="keyword">ON</span> t3_val <span class="keyword">WITH</span> <span class="number">50</span> BUCKETS;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">| Table   | Op        | Msg_type | Msg_text                                          |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">| test.t3 | histogram | status   | Histogram statistics created for column 't3_val'. |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">---------+-----------+----------+---------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">1 row in <span class="keyword">set</span> (<span class="number">1.74</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">SELECT</span> TABLE_NAME,COLUMN_NAME,HISTOGRAM <span class="keyword">FROM</span> INFORMATION_SCHEMA.COLUMN_STATISTICS <span class="keyword">WHERE</span> TABLE_NAME <span class="keyword">IN</span>(<span class="string">'t1'</span>,<span class="string">'t2'</span>,<span class="string">'t3'</span>)\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">1.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line">TABLE_NAME: t1</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line">COLUMN_NAME: t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">  HISTOGRAM: &#123;<span class="string">"buckets"</span>: [[<span class="number">0</span>, <span class="number">0.00906727224855187</span>], [<span class="number">1</span>, <span class="number">0.019039626119010007</span>], [<span class="number">2</span>, <span class="number">0.028880331753554506</span>], [<span class="number">3</span>, <span class="number">0.03942864665613481</span>], [<span class="number">4</span>, <span class="number">0.04921998420221169</span>], [<span class="number">5</span>, <span class="number">0.05958728278041074</span>], [<span class="number">6</span>, <span class="number">0.06911532385466035</span>], [<span class="number">7</span>, <span class="number">0.07954844655081622</span>], [<span class="number">8</span>, <span class="number">0.08952080042127436</span>], [<span class="number">9</span>, <span class="number">0.09959189046866773</span>], [<span class="number">10</span>, <span class="number">0.10972880463401792</span>], [<span class="number">11</span>, <span class="number">0.11979989468141128</span>], [<span class="number">12</span>, <span class="number">0.1296899684044234</span>], [<span class="number">13</span>, <span class="number">0.13972814639283834</span>], [<span class="number">14</span>, <span class="number">0.14984860452869933</span>], [<span class="number">15</span>, <span class="number">0.1599855186940495</span>], [<span class="number">16</span>, <span class="number">0.17020471300684573</span>], [<span class="number">17</span>, <span class="number">0.1806542917324908</span>], [<span class="number">18</span>, <span class="number">0.19029752501316485</span>], [<span class="number">19</span>, <span class="number">0.2006319115323855</span>], [<span class="number">20</span>, <span class="number">0.21106503422854136</span>], [<span class="number">21</span>, <span class="number">0.22092219589257506</span>], [<span class="number">22</span>, <span class="number">0.23048314902580308</span>], [<span class="number">23</span>, <span class="number">0.24020866245392314</span>], [<span class="number">24</span>, <span class="number">0.2503455766192733</span>], [<span class="number">25</span>, <span class="number">0.2606470510795155</span>], [<span class="number">26</span>, <span class="number">0.27015863612427593</span>], [<span class="number">27</span>, <span class="number">0.2805423907319642</span>], [<span class="number">28</span>, <span class="number">0.29061348077935756</span>], [<span class="number">29</span>, <span class="number">0.301490916271722</span>], [<span class="number">30</span>, <span class="number">0.3111012374934176</span>], [<span class="number">31</span>, <span class="number">0.321254607688257</span>], [<span class="number">32</span>, <span class="number">0.33055226434965773</span>], [<span class="number">33</span>, <span class="number">0.34004739336492895</span>], [<span class="number">34</span>, <span class="number">0.3500526592943655</span>], [<span class="number">35</span>, <span class="number">0.36081490258030546</span>], [<span class="number">36</span>, <span class="number">0.3701948393891522</span>], [<span class="number">37</span>, <span class="number">0.3806937862032649</span>], [<span class="number">38</span>, <span class="number">0.39117627698788837</span>], [<span class="number">39</span>, <span class="number">0.4017739599789363</span>], [<span class="number">40</span>, <span class="number">0.4112690889942075</span>], [<span class="number">41</span>, <span class="number">0.42153765139547134</span>], [<span class="number">42</span>, <span class="number">0.43180621379673517</span>], [<span class="number">43</span>, <span class="number">0.44153172722485523</span>], [<span class="number">44</span>, <span class="number">0.4515863612427594</span>], [<span class="number">45</span>, <span class="number">0.4617232754081096</span>], [<span class="number">46</span>, <span class="number">0.4715475250131649</span>], [<span class="number">47</span>, <span class="number">0.48156924697209064</span>], [<span class="number">48</span>, <span class="number">0.4915416008425488</span>], [<span class="number">49</span>, <span class="number">0.501843075302791</span>], [<span class="number">50</span>, <span class="number">0.5123584781463929</span>], [<span class="number">51</span>, <span class="number">0.5219358873091101</span>], [<span class="number">52</span>, <span class="number">0.5324183780937336</span>], [<span class="number">53</span>, <span class="number">0.5423578199052134</span>], [<span class="number">54</span>, <span class="number">0.5519023170089522</span>], [<span class="number">55</span>, <span class="number">0.5616607424960507</span>], [<span class="number">56</span>, <span class="number">0.5706621906266457</span>], [<span class="number">57</span>, <span class="number">0.5808155608214851</span>], [<span class="number">58</span>, <span class="number">0.5907220905739864</span>], [<span class="number">59</span>, <span class="number">0.6008754607688258</span>], [<span class="number">60</span>, <span class="number">0.6109794628751976</span>], [<span class="number">61</span>, <span class="number">0.6217910742496051</span>], [<span class="number">62</span>, <span class="number">0.631335571353344</span>], [<span class="number">63</span>, <span class="number">0.641225645076356</span>], [<span class="number">64</span>, <span class="number">0.651263823064771</span>], [<span class="number">65</span>, <span class="number">0.6606108478146394</span>], [<span class="number">66</span>, <span class="number">0.6706654818325436</span>], [<span class="number">67</span>, <span class="number">0.68025934702475</span>], [<span class="number">68</span>, <span class="number">0.6897544760400212</span>], [<span class="number">69</span>, <span class="number">0.6995293575566088</span>], [<span class="number">70</span>, <span class="number">0.7096169036334914</span>], [<span class="number">71</span>, <span class="number">0.7195728014744603</span>], [<span class="number">72</span>, <span class="number">0.7284261453396526</span>], [<span class="number">73</span>, <span class="number">0.7379870984728806</span>], [<span class="number">74</span>, <span class="number">0.7483543970510796</span>], [<span class="number">75</span>, <span class="number">0.7585900473933651</span>], [<span class="number">76</span>, <span class="number">0.7683649289099528</span>], [<span class="number">77</span>, <span class="number">0.778501843075303</span>], [<span class="number">78</span>, <span class="number">0.7888197735650344</span>], [<span class="number">79</span>, <span class="number">0.7988579515534494</span>], [<span class="number">80</span>, <span class="number">0.8090606898367564</span>], [<span class="number">81</span>, <span class="number">0.8188191153238549</span>], [<span class="number">82</span>, <span class="number">0.8286762769878886</span>], [<span class="number">83</span>, <span class="number">0.8388461032122172</span>], [<span class="number">84</span>, <span class="number">0.8491475776724594</span>], [<span class="number">85</span>, <span class="number">0.8594984202211693</span>], [<span class="number">86</span>, <span class="number">0.870326487625066</span>], [<span class="number">87</span>, <span class="number">0.8800520010531862</span>], [<span class="number">88</span>, <span class="number">0.8895635860979465</span>], [<span class="number">89</span>, <span class="number">0.8993549236440234</span>], [<span class="number">90</span>, <span class="number">0.9087348604528701</span>], [<span class="number">91</span>, <span class="number">0.9184932859399686</span>], [<span class="number">92</span>, <span class="number">0.9281365192206427</span>], [<span class="number">93</span>, <span class="number">0.9390139547130071</span>], [<span class="number">94</span>, <span class="number">0.9495951816745658</span>], [<span class="number">95</span>, <span class="number">0.9594687993680887</span>], [<span class="number">96</span>, <span class="number">0.969934834123223</span>], [<span class="number">97</span>, <span class="number">0.9799071879936812</span>], [<span class="number">98</span>, <span class="number">0.9900605581885206</span>], [<span class="number">99</span>, <span class="number">1.0000000000000002</span>]], <span class="string">"data-type"</span>: <span class="string">"int"</span>, <span class="string">"null-values"</span>: <span class="number">0.0</span>, <span class="string">"collation-id"</span>: <span class="number">8</span>, <span class="string">"last-updated"</span>: <span class="string">"2019-12-20 07:10:36.951184"</span>, <span class="string">"sampling-rate"</span>: <span class="number">0.6069398964414872</span>, <span class="string">"histogram-type"</span>: <span class="string">"singleton"</span>, <span class="string">"number-of-buckets-specified"</span>: <span class="number">100</span>&#125;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">2.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line">TABLE_NAME: t2</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line">COLUMN_NAME: t2_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">  HISTOGRAM: &#123;<span class="string">"buckets"</span>: [[<span class="number">0</span>, <span class="number">0.010344656910461797</span>], [<span class="number">1</span>, <span class="number">0.020293346092293475</span>], [<span class="number">2</span>, <span class="number">0.03050601375987857</span>], [<span class="number">3</span>, <span class="number">0.040520697563148605</span>], [<span class="number">4</span>, <span class="number">0.050584877332497405</span>], [<span class="number">5</span>, <span class="number">0.06086353962152085</span>], [<span class="number">6</span>, <span class="number">0.07094421804622923</span>], [<span class="number">7</span>, <span class="number">0.0807774166405438</span>], [<span class="number">8</span>, <span class="number">0.09095708699740972</span>], [<span class="number">9</span>, <span class="number">0.10044381382917293</span>], [<span class="number">10</span>, <span class="number">0.11115144115754567</span>], [<span class="number">11</span>, <span class="number">0.12060517067858971</span>], [<span class="number">12</span>, <span class="number">0.13043836927290428</span>], [<span class="number">13</span>, <span class="number">0.14055204500833185</span>], [<span class="number">14</span>, <span class="number">0.15101219250631076</span>], [<span class="number">15</span>, <span class="number">0.16181881176684104</span>], [<span class="number">16</span>, <span class="number">0.17137153322004262</span>], [<span class="number">17</span>, <span class="number">0.18148520895547018</span>], [<span class="number">18</span>, <span class="number">0.19158238603553815</span>], [<span class="number">19</span>, <span class="number">0.20095362227978425</span>], [<span class="number">20</span>, <span class="number">0.21090231146161592</span>], [<span class="number">21</span>, <span class="number">0.22083450198808802</span>], [<span class="number">22</span>, <span class="number">0.2309151804127964</span>], [<span class="number">23</span>, <span class="number">0.24089686690534726</span>], [<span class="number">24</span>, <span class="number">0.2507465641550214</span>], [<span class="number">25</span>, <span class="number">0.26132220224051744</span>], [<span class="number">26</span>, <span class="number">0.2711718994901916</span>], [<span class="number">27</span>, <span class="number">0.28136806850241713</span>], [<span class="number">28</span>, <span class="number">0.29095378726633786</span>], [<span class="number">29</span>, <span class="number">0.3012159509000017</span>], [<span class="number">30</span>, <span class="number">0.31078517100856284</span>], [<span class="number">31</span>, <span class="number">0.3203378924617644</span>], [<span class="number">32</span>, <span class="number">0.33020408836679815</span>], [<span class="number">33</span>, <span class="number">0.3400207883057531</span>], [<span class="number">34</span>, <span class="number">0.3501509626965403</span>], [<span class="number">35</span>, <span class="number">0.3595057002854268</span>], [<span class="number">36</span>, <span class="number">0.36963587467621395</span>], [<span class="number">37</span>, <span class="number">0.3792380920954943</span>], [<span class="number">38</span>, <span class="number">0.38908778934516847</span>], [<span class="number">39</span>, <span class="number">0.3987560013858871</span>], [<span class="number">40</span>, <span class="number">0.4088366798105955</span>], [<span class="number">41</span>, <span class="number">0.41792743891372863</span>], [<span class="number">42</span>, <span class="number">0.4283545891009884</span>], [<span class="number">43</span>, <span class="number">0.4382537823167413</span>], [<span class="number">44</span>, <span class="number">0.4483179620860901</span>], [<span class="number">45</span>, <span class="number">0.4588276055501478</span>], [<span class="number">46</span>, <span class="number">0.4684463216247877</span>], [<span class="number">47</span>, <span class="number">0.4783785121512598</span>], [<span class="number">48</span>, <span class="number">0.48827770536701276</span>], [<span class="number">49</span>, <span class="number">0.4977974295094951</span>], [<span class="number">50</span>, <span class="number">0.5083070729735528</span>], [<span class="number">51</span>, <span class="number">0.5186517298840146</span>], [<span class="number">52</span>, <span class="number">0.5285014271336888</span>], [<span class="number">53</span>, <span class="number">0.5386810974905547</span>], [<span class="number">54</span>, <span class="number">0.54928973288677</span>], [<span class="number">55</span>, <span class="number">0.5592714193793208</span>], [<span class="number">56</span>, <span class="number">0.5693026018379505</span>], [<span class="number">57</span>, <span class="number">0.579894738578806</span>], [<span class="number">58</span>, <span class="number">0.5904538780089424</span>], [<span class="number">59</span>, <span class="number">0.6006995429872467</span>], [<span class="number">60</span>, <span class="number">0.6104337496494038</span>], [<span class="number">61</span>, <span class="number">0.6205309267294717</span>], [<span class="number">62</span>, <span class="number">0.629935160284437</span>], [<span class="number">63</span>, <span class="number">0.6396198709805152</span>], [<span class="number">64</span>, <span class="number">0.6496510534391449</span>], [<span class="number">65</span>, <span class="number">0.6592697695137848</span>], [<span class="number">66</span>, <span class="number">0.6691359654188186</span>], [<span class="number">67</span>, <span class="number">0.6794311263632016</span>], [<span class="number">68</span>, <span class="number">0.6892478263021565</span>], [<span class="number">69</span>, <span class="number">0.6996089818679779</span>], [<span class="number">70</span>, <span class="number">0.7095576710498096</span>], [<span class="number">71</span>, <span class="number">0.7197538400620351</span>], [<span class="number">72</span>, <span class="number">0.7299335104189011</span>], [<span class="number">73</span>, <span class="number">0.7395687251489006</span>], [<span class="number">74</span>, <span class="number">0.7493854250878556</span>], [<span class="number">75</span>, <span class="number">0.7593671115804064</span>], [<span class="number">76</span>, <span class="number">0.7696622725247894</span>], [<span class="number">77</span>, <span class="number">0.7790335087690354</span>], [<span class="number">78</span>, <span class="number">0.7890811898830247</span>], [<span class="number">79</span>, <span class="number">0.7992278629291714</span>], [<span class="number">80</span>, <span class="number">0.809457029252116</span>], [<span class="number">81</span>, <span class="number">0.8196202009536224</span>], [<span class="number">82</span>, <span class="number">0.8290904291300261</span>], [<span class="number">83</span>, <span class="number">0.838907129068981</span>], [<span class="number">84</span>, <span class="number">0.8489053142168914</span>], [<span class="number">85</span>, <span class="number">0.860058405239973</span>], [<span class="number">86</span>, <span class="number">0.8702710729075581</span>], [<span class="number">87</span>, <span class="number">0.8803517513322665</span>], [<span class="number">88</span>, <span class="number">0.8914388477339098</span>], [<span class="number">89</span>, <span class="number">0.9011730543960669</span>], [<span class="number">90</span>, <span class="number">0.910544290640313</span>], [<span class="number">91</span>, <span class="number">0.92027849730247</span>], [<span class="number">92</span>, <span class="number">0.9298807147217504</span>], [<span class="number">93</span>, <span class="number">0.9403738595304485</span>], [<span class="number">94</span>, <span class="number">0.9505205325765952</span>], [<span class="number">95</span>, <span class="number">0.9599742620976393</span>], [<span class="number">96</span>, <span class="number">0.9698239593473134</span>], [<span class="number">97</span>, <span class="number">0.9796571579416279</span>], [<span class="number">98</span>, <span class="number">0.9898038309877746</span>], [<span class="number">99</span>, <span class="number">1.0</span>]], <span class="string">"data-type"</span>: <span class="string">"int"</span>, <span class="string">"null-values"</span>: <span class="number">0.0</span>, <span class="string">"collation-id"</span>: <span class="number">8</span>, <span class="string">"last-updated"</span>: <span class="string">"2019-12-20 07:11:40.258403"</span>, <span class="string">"sampling-rate"</span>: <span class="number">0.6069398964414872</span>, <span class="string">"histogram-type"</span>: <span class="string">"singleton"</span>, <span class="string">"number-of-buckets-specified"</span>: <span class="number">100</span>&#125;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">34</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">3.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">35</span></pre></td><td class="code"><pre><span class="line">TABLE_NAME: t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">36</span></pre></td><td class="code"><pre><span class="line">COLUMN_NAME: t3_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">37</span></pre></td><td class="code"><pre><span class="line">  HISTOGRAM: &#123;<span class="string">"buckets"</span>: [[<span class="number">0</span>, <span class="number">0.02045</span>], [<span class="number">1</span>, <span class="number">0.041569999999999996</span>], [<span class="number">2</span>, <span class="number">0.06140999999999999</span>], [<span class="number">3</span>, <span class="number">0.08099999999999999</span>], [<span class="number">4</span>, <span class="number">0.10089</span>], [<span class="number">5</span>, <span class="number">0.12076999999999999</span>], [<span class="number">6</span>, <span class="number">0.14067</span>], [<span class="number">7</span>, <span class="number">0.16113</span>], [<span class="number">8</span>, <span class="number">0.18152</span>], [<span class="number">9</span>, <span class="number">0.20198999999999998</span>], [<span class="number">10</span>, <span class="number">0.22208999999999998</span>], [<span class="number">11</span>, <span class="number">0.24156</span>], [<span class="number">12</span>, <span class="number">0.26165</span>], [<span class="number">13</span>, <span class="number">0.28160999999999997</span>], [<span class="number">14</span>, <span class="number">0.30163999999999996</span>], [<span class="number">15</span>, <span class="number">0.32105999999999996</span>], [<span class="number">16</span>, <span class="number">0.34131999999999996</span>], [<span class="number">17</span>, <span class="number">0.36146999999999996</span>], [<span class="number">18</span>, <span class="number">0.38072999999999996</span>], [<span class="number">19</span>, <span class="number">0.40054999999999996</span>], [<span class="number">20</span>, <span class="number">0.42157999999999995</span>], [<span class="number">21</span>, <span class="number">0.44176999999999994</span>], [<span class="number">22</span>, <span class="number">0.46115999999999996</span>], [<span class="number">23</span>, <span class="number">0.48172</span>], [<span class="number">24</span>, <span class="number">0.50109</span>], [<span class="number">25</span>, <span class="number">0.52171</span>], [<span class="number">26</span>, <span class="number">0.54217</span>], [<span class="number">27</span>, <span class="number">0.5621</span>], [<span class="number">28</span>, <span class="number">0.58143</span>], [<span class="number">29</span>, <span class="number">0.60137</span>], [<span class="number">30</span>, <span class="number">0.6214099999999999</span>], [<span class="number">31</span>, <span class="number">0.6411899999999999</span>], [<span class="number">32</span>, <span class="number">0.6616299999999999</span>], [<span class="number">33</span>, <span class="number">0.6814199999999999</span>], [<span class="number">34</span>, <span class="number">0.7012299999999999</span>], [<span class="number">35</span>, <span class="number">0.7212699999999999</span>], [<span class="number">36</span>, <span class="number">0.7411899999999999</span>], [<span class="number">37</span>, <span class="number">0.76089</span>], [<span class="number">38</span>, <span class="number">0.7811199999999999</span>], [<span class="number">39</span>, <span class="number">0.8009499999999999</span>], [<span class="number">40</span>, <span class="number">0.8204999999999999</span>], [<span class="number">41</span>, <span class="number">0.8404599999999999</span>], [<span class="number">42</span>, <span class="number">0.8609899999999999</span>], [<span class="number">43</span>, <span class="number">0.8805099999999999</span>], [<span class="number">44</span>, <span class="number">0.9009199999999999</span>], [<span class="number">45</span>, <span class="number">0.9204399999999999</span>], [<span class="number">46</span>, <span class="number">0.94136</span>], [<span class="number">47</span>, <span class="number">0.96039</span>], [<span class="number">48</span>, <span class="number">0.9805499999999999</span>], [<span class="number">49</span>, <span class="number">0.9999999999999999</span>]], <span class="string">"data-type"</span>: <span class="string">"int"</span>, <span class="string">"null-values"</span>: <span class="number">0.0</span>, <span class="string">"collation-id"</span>: <span class="number">8</span>, <span class="string">"last-updated"</span>: <span class="string">"2019-12-20 07:41:17.446201"</span>, <span class="string">"sampling-rate"</span>: <span class="number">1.0</span>, <span class="string">"histogram-type"</span>: <span class="string">"singleton"</span>, <span class="string">"number-of-buckets-specified"</span>: <span class="number">50</span>&#125;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">38</span></pre></td><td class="code"><pre><span class="line"><span class="number">3</span> <span class="keyword">rows</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<p>测试如何查看hash join：EXPLAIN FORMAT=TREE</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##直接使用EXPLAIN仅能看到"Block Nested Loop"关键字</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT * FROM t1,t2,t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">    -&gt; WHERE t2.t2_val = t1.t1_val and t1.t1_val=t3.t3_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra                                              |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t1    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |   100.00 | NULL                                               |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t2    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t3    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">3 rows in <span class="keyword">set</span>, <span class="number">1</span> <span class="keyword">warning</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##只有使用"EXPLAIN FORMAT=TREE"才能看到"Inner hash join"关键字，下面输出可以看出3张表按照t1-&gt;t2-&gt;t3的顺序进行关联，两两之间均为hash join</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">EXPLAIN</span> <span class="keyword">FORMAT</span>=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> t1,t2,t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val <span class="keyword">and</span> t1.t1_val=t3.t3_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">1.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t3.t3_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">10141380914795.79</span> <span class="keyword">rows</span>=<span class="number">10139847189164</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t3  (<span class="keyword">cost</span>=<span class="number">0.52</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t2.t2_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">1009337794.31</span> <span class="keyword">rows</span>=<span class="number">1009301545</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t2  (<span class="keyword">cost</span>=<span class="number">0.27</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">                -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<p>测试hint与索引的效果：索引的优先级高于hint</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##尝试让t1和t2之间进行hash join，t2和t3之间不使用hash join，但是EXPLAIN FORMAT=TREE未看到输出结果，使用EXPLAIN看到的是BNL连接方式</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT /*+HASH_JOIN(t1,t2) NO_HASH_JOIN(t2,t3)*/ * FROM t1,t2,t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">    -&gt; WHERE t2.t2_val = t1.t1_val and t1.t1_val=t3.t3_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: &lt;<span class="keyword">not</span> executable <span class="keyword">by</span> iterator executor&gt;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span>, <span class="number">1</span> <span class="keyword">warning</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">EXPLAIN</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">SELECT</span> <span class="comment">/*+HASH_JOIN(t1,t2) NO_HASH_JOIN(t2,t3)*/</span> * <span class="keyword">FROM</span> t1,t2,t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val <span class="keyword">and</span> t1.t1_val=t3.t3_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra                                              |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t1    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |   100.00 | NULL                                               |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t2    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t3    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">3 rows in <span class="keyword">set</span>, <span class="number">2</span> <span class="keyword">warnings</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##在t3表的t3_val字段上创建索引，尝试用HASH_JOIN(t1,t3)强制使用hash join，发现hint被忽略，t3作为被驱动表使用了idx_t3_val索引</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">create</span> <span class="keyword">index</span> idx_t3_val <span class="keyword">on</span> t3(t3_val);</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (0.58 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">Records: 0  Duplicates: 0  Warnings: 0</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT /*+HASH_JOIN(t1,t3)*/ * FROM t1,t3</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">    -&gt; WHERE t1.t1_val=t3.t3_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Nested</span> <span class="keyword">loop</span> <span class="keyword">inner</span> <span class="keyword">join</span>  (<span class="keyword">cost</span>=<span class="number">37990517.85</span> <span class="keyword">rows</span>=<span class="number">210271152</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line">    -&gt; Filter: (t1.t1_val <span class="keyword">is</span> <span class="keyword">not</span> <span class="literal">null</span>)  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">34</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Index</span> lookup <span class="keyword">on</span> t3 <span class="keyword">using</span> idx_t3_val (t3_val=t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">168.75</span> <span class="keyword">rows</span>=<span class="number">2093</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">35</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">36</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">37</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">38</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##测试完清理索引</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">39</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">alter</span> <span class="keyword">table</span> t3 <span class="keyword">drop</span> <span class="keyword">index</span> idx_t3_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">40</span></pre></td><td class="code"><pre><span class="line">Query OK, 0 rows affected (0.16 sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">41</span></pre></td><td class="code"><pre><span class="line">Records: 0  Duplicates: 0  Warnings: 0</span></pre></td></tr></table></figure>
+
+<p>测试笛卡尔连接：支持hash join</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT * FROM t1,t2\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span>  (<span class="keyword">cost</span>=<span class="number">1009337794.31</span> <span class="keyword">rows</span>=<span class="number">10093015296</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t2  (<span class="keyword">cost</span>=<span class="number">0.36</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<p>测试外连接：不支持hash join，退化为BNL</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT * FROM t1 JOIN t2 ON t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; LEFT JOIN t3 ON  t1.t1_val=t3.t3_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: &lt;<span class="keyword">not</span> executable <span class="keyword">by</span> iterator executor&gt;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">EXPLAIN</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> t1 <span class="keyword">JOIN</span> t2 <span class="keyword">ON</span> t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">LEFT</span> <span class="keyword">JOIN</span> t3 <span class="keyword">ON</span>  t1.t1_val=t3.t3_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra                                              |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t1    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |   100.00 | NULL                                               |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t2    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t3    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |   100.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">3 rows in <span class="keyword">set</span>, <span class="number">1</span> <span class="keyword">warning</span> (<span class="number">0.00</span> sec)</span></pre></td></tr></table></figure>
+
+<p>测试不等值连接：不支持hash join，退化为BNL</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##SQL中只要有一个不等值连接，整个SQL中的所有连接都不会使用hash join</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT * FROM t1 JOIN t2 ON t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">    -&gt; JOIN t3 ON  t1.t1_val &gt; t3.t3_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: &lt;<span class="keyword">not</span> executable <span class="keyword">by</span> iterator executor&gt;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.00</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">EXPLAIN</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> t1 <span class="keyword">JOIN</span> t2 <span class="keyword">ON</span> t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">JOIN</span> t3 <span class="keyword">ON</span>  t1.t1_val&gt;t3.t3_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line">| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra                                              |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t1    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |   100.00 | NULL                                               |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t2    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    10.00 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line">|  1 | SIMPLE      | t3    | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 100464 |    33.33 | Using where; Using join buffer (Block Nested Loop) |</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line">+<span class="comment">----+-------------+-------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------+</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">20</span></pre></td><td class="code"><pre><span class="line">3 rows in <span class="keyword">set</span>, <span class="number">1</span> <span class="keyword">warning</span> (<span class="number">0.01</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">21</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">22</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##在满足全部为等值内连接的前提下，可以同时包含不等值连接条件</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">23</span></pre></td><td class="code"><pre><span class="line">mysql&gt; <span class="keyword">EXPLAIN</span> <span class="keyword">FORMAT</span>=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">24</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> t1 <span class="keyword">JOIN</span> t2 <span class="keyword">ON</span> t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">25</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">JOIN</span> t3 <span class="keyword">ON</span> t1.t1_val = t3.t3_val <span class="keyword">and</span> t1.t1_id &gt; t3_id\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">26</span></pre></td><td class="code"><pre><span class="line">*************************** <span class="number">1.</span> <span class="keyword">row</span> ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">27</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t2.t2_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">3380795229097.44</span> <span class="keyword">rows</span>=<span class="number">3379611112797</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">28</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t2  (<span class="keyword">cost</span>=<span class="number">0.52</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">29</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">30</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Nested</span> <span class="keyword">loop</span> <span class="keyword">inner</span> <span class="keyword">join</span>  (<span class="keyword">cost</span>=<span class="number">1009337794.31</span> <span class="keyword">rows</span>=<span class="number">336400209</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">31</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">32</span></pre></td><td class="code"><pre><span class="line">            -&gt; Filter: ((t3.t3_val = t1.t1_val) <span class="keyword">and</span> (t1.t1_id &gt; t3.t3_id))  (<span class="keyword">cost</span>=<span class="number">0.26</span> <span class="keyword">rows</span>=<span class="number">3348</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">33</span></pre></td><td class="code"><pre><span class="line">                -&gt; <span class="keyword">Index</span> <span class="keyword">range</span> <span class="keyword">scan</span> <span class="keyword">on</span> t3 (re-planned <span class="keyword">for</span> <span class="keyword">each</span> iteration)  (<span class="keyword">cost</span>=<span class="number">0.26</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr></table></figure>
+
+<p>测试非连接字段使用索引的情况：非连接字段可以使用索引，可以同时使用hash join</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT * FROM t1 JOIN t2 ON t2.t2_val = t1.t1_val</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; JOIN t3 ON  t1.t1_val=t3.t3_val and t1.t1_id&gt;5000\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t3.t3_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">5070690462463.22</span> <span class="keyword">rows</span>=<span class="number">5069923594582</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t3  (<span class="keyword">cost</span>=<span class="number">0.52</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t2.t2_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">504673934.36</span> <span class="keyword">rows</span>=<span class="number">504650772</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t2  (<span class="keyword">cost</span>=<span class="number">0.28</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line">                -&gt; Filter: (t1.t1_id &gt; <span class="number">5000</span>)  (<span class="keyword">cost</span>=<span class="number">10060.40</span> <span class="keyword">rows</span>=<span class="number">50232</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line">                    -&gt; <span class="keyword">Index</span> <span class="keyword">range</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1 <span class="keyword">using</span> PRIMARY  (<span class="keyword">cost</span>=<span class="number">10060.40</span> <span class="keyword">rows</span>=<span class="number">50232</span>)</span></pre></td></tr></table></figure>
+
+<p>测试join buffer大小对hash join性能的影响</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line">mysql&gt; EXPLAIN FORMAT=TREE</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line">    -&gt; SELECT count(*) FROM t1,t2</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line">    -&gt; WHERE t2.t2_val = t1.t1_val\G</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line">*************************** 1. row ***************************</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">EXPLAIN</span>: -&gt; <span class="keyword">Aggregate</span>: <span class="keyword">count</span>(<span class="number">0</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">6</span></pre></td><td class="code"><pre><span class="line">    -&gt; <span class="keyword">Inner</span> <span class="keyword">hash</span> <span class="keyword">join</span> (t2.t2_val = t1.t1_val)  (<span class="keyword">cost</span>=<span class="number">1009311796.29</span> <span class="keyword">rows</span>=<span class="number">1009301545</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">7</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t2  (<span class="keyword">cost</span>=<span class="number">0.01</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">8</span></pre></td><td class="code"><pre><span class="line">        -&gt; <span class="keyword">Hash</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">9</span></pre></td><td class="code"><pre><span class="line">            -&gt; <span class="keyword">Table</span> <span class="keyword">scan</span> <span class="keyword">on</span> t1  (<span class="keyword">cost</span>=<span class="number">10102.65</span> <span class="keyword">rows</span>=<span class="number">100464</span>)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">10</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">11</span></pre></td><td class="code"><pre><span class="line"><span class="number">1</span> <span class="keyword">row</span> <span class="keyword">in</span> <span class="keyword">set</span> (<span class="number">0.11</span> sec)</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">12</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">13</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##以如下形式，在会话级修改join_buffer_size为不同的值，测试SQL语句执行时长</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">14</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">set</span> join_buffer_size=<span class="number">1024</span>*<span class="number">1024</span>*<span class="number">4</span>;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">15</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">16</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">17</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">18</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">19</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr></table></figure>
+
+<p>测试结果：join_buffer_size不是越大越好，这应该与malloc函数选择使用brk还是mmap系统调用分配内存的方式有关</p>
+<table>
+<thead>
+<tr>
+<th>join_buffer_size</th>
+<th>执行时长</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>32KB</td>
+<td>4.04~4.37s</td>
+</tr>
+<tr>
+<td>64KB</td>
+<td>4.22~4.43s</td>
+</tr>
+<tr>
+<td>128KB</td>
+<td>4.24~4.50s</td>
+</tr>
+<tr>
+<td>256KB</td>
+<td>4.24~4.67s</td>
+</tr>
+<tr>
+<td>512KB</td>
+<td>4.19~4.59s</td>
+</tr>
+<tr>
+<td>1MB</td>
+<td>4.17~4.74s</td>
+</tr>
+<tr>
+<td>2MB</td>
+<td>4.77~5.28s</td>
+</tr>
+<tr>
+<td>4MB</td>
+<td>5.15~6.35s</td>
+</tr>
+<tr>
+<td>8MB</td>
+<td>7.39s~7.73s</td>
+</tr>
+<tr>
+<td>16MB</td>
+<td>11.15s~11.95s</td>
+</tr>
+</tbody></table>
+<p>与BNL的性能比较</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##使用hash join，从上面的测试结果可以看到，执行时间在4~5秒之间</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">2</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span>  <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr><tr><td class="gutter"><pre><span class="line">3</span></pre></td><td class="code"><pre><span class="line"></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">4</span></pre></td><td class="code"><pre><span class="line"><span class="comment">##使用BNL，执行10分钟未返回结果，最终放弃了</span></span></pre></td></tr><tr><td class="gutter"><pre><span class="line">5</span></pre></td><td class="code"><pre><span class="line"><span class="keyword">SELECT</span> <span class="comment">/*+NO_HASH_JOIN(t1,t2)*/</span> <span class="keyword">count</span>(*) <span class="keyword">FROM</span> t1,t2 <span class="keyword">WHERE</span> t2.t2_val = t1.t1_val;</span></pre></td></tr></table></figure>
+
+<p>Optimizer Trace视角：未发现特征信息，这里不贴trace了，太长了…</p>
+<hr>
+<h4 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h4><p><em>How to Use Hash Joins? (文档 ID 2562434.1)</em></p>
+<p><em><a href="https://dev.mysql.com/doc/refman/8.0/en/hash-joins.html" target="_blank" rel="noopener">https://dev.mysql.com/doc/refman/8.0/en/hash-joins.html</a></em></p>
+
+    </div>
+
+    
+    
+    
+        <div class="reward-container">
+  <div></div>
+  <button disable="enable" onclick="var qr = document.getElementById(&quot;qr&quot;); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    打赏
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/images/weixin.png" alt="何多多 微信支付">
+        <p>微信支付</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/images/zhifubao.png" alt="何多多 支付宝">
+        <p>支付宝</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          
+          <div class="post-tags">
+              <a href="/tags/SQL%E4%BC%98%E5%8C%96/" rel="tag"><i class="fa fa-tag"></i> SQL优化</a>
+              <a href="/tags/MySQL/" rel="tag"><i class="fa fa-tag"></i> MySQL</a>
+              <a href="/tags/%E6%89%A7%E8%A1%8C%E8%AE%A1%E5%88%92/" rel="tag"><i class="fa fa-tag"></i> 执行计划</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2019/12/16/open_files_limit%E5%8F%82%E6%95%B0%E7%9C%9F%E5%AE%9E%E5%80%BC%E6%B5%8B%E8%AF%95/" rel="prev" title="open_files_limit参数真实值测试">
+      <i class="fa fa-chevron-left"></i> open_files_limit参数真实值测试
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2020/03/31/MySQL%E7%9A%84%E8%B4%A6%E5%8F%B7%E5%8C%B9%E9%85%8D%E8%A7%84%E5%88%99/" rel="next" title="MySQL的账号匹配规则">
+      MySQL的账号匹配规则 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+  </div>
+
+
+          </div>
+          
+    <div class="comments" id="gitalk-container"></div>
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let activeClass = CONFIG.comments.activeClass;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-4"><a class="nav-link" href="#概述"><span class="nav-number">1.</span> <span class="nav-text">概述</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#测试"><span class="nav-number">2.</span> <span class="nav-text">测试</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#参考"><span class="nav-number">3.</span> <span class="nav-text">参考</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+    <img class="site-author-image" itemprop="image" alt="何多多"
+      src="/images/avatar.jpg">
+  <p class="site-author-name" itemprop="name">何多多</p>
+  <div class="site-description" itemprop="description">DBA & DevOps</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">4</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">2</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">6</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+<div class="copyright">
+  
+  &copy; 2019 – 
+  <span itemprop="copyrightYear">2020</span>
+  <span class="with-love">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">何多多</span>
+</div>
+  <div class="addthis_inline_share_toolbox">
+    <script src="//s7.addthis.com/js/300/addthis_widget.js#pubid=ra-5df47cf348219a47" async="async"></script>
+  </div>
+
+        
+<div class="busuanzi-count">
+  <script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+<script src="/js/utils.js"></script><script src="/js/motion.js"></script>
+<script src="/js/schemes/pisces.js"></script>
+<script src="/js/next-boot.js"></script>
+
+
+
+  
+  <script>
+    (function(){
+      var bp = document.createElement('script');
+      var curProtocol = window.location.protocol.split(':')[0];
+      bp.src = (curProtocol === 'https') ? 'https://zz.bdstatic.com/linksubmit/push.js' : 'http://push.zhanzhang.baidu.com/push.js';
+      var s = document.getElementsByTagName("script")[0];
+      s.parentNode.insertBefore(bp, s);
+    })();
+  </script>
+
+
+
+
+  <script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.css">
+
+<script>
+NexT.utils.loadComments(document.querySelector('#gitalk-container'), () => {
+  NexT.utils.getScript('//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js', () => {
+    var gitalk = new Gitalk({
+      clientID: 'c3e651994454ca657b5b',
+      clientSecret: 'b9be0561665fd24fb631e5bdcba8dd4b402e3110',
+      repo: 'ddhe9527.github.io',
+      owner: 'ddhe9527',
+      admin: ['ddhe9527'],
+      id: '8844113748a217cc2418735d820ba666',
+        language: 'zh-CN',
+      distractionFreeMode: 'true'
+    });
+    gitalk.render('gitalk-container');
+  }, window.Gitalk);
+});
+</script>
+
+</body>
+</html>
